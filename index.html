@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Smart City Surveillance Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #0a0e1a; color: #e2e8f0; min-height: 100vh; }
+  header { background: #111827; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1f2937; }
+  header h1 { font-size: 1.4rem; color: #60a5fa; }
+  .live-dot { width: 10px; height: 10px; background: #22c55e; border-radius: 50%; display: inline-block; margin-right: 6px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; padding: 1.5rem 2rem; }
+  .stat-card { background: #111827; border-radius: 10px; padding: 1rem; border: 1px solid #1f2937; text-align: center; }
+  .stat-card .number { font-size: 2rem; font-weight: bold; color: #60a5fa; }
+  .stat-card .label { font-size: 0.75rem; color: #9ca3af; margin-top: 0.3rem; text-transform: uppercase; letter-spacing: 0.1em; }
+  .section-title { padding: 0 2rem 1rem; font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; color: #6b7280; }
+  .feeds { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; padding: 0 2rem 2rem; }
+  .feed-card { background: #111827; border-radius: 12px; overflow: hidden; border: 1px solid #1f2937; transition: border-color 0.3s; }
+  .feed-card:hover { border-color: #3b82f6; }
+  .feed-card img { width: 100%; height: 160px; object-fit: cover; }
+  .feed-info { padding: 0.75rem 1rem; }
+  .feed-info .location { font-size: 0.85rem; font-weight: bold; color: #e2e8f0; }
+  .feed-info .time { font-size: 0.7rem; color: #6b7280; margin-top: 0.2rem; }
+  .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.7rem; font-weight: bold; margin-top: 0.5rem; }
+  .badge.person { background: #1d4ed8; color: #bfdbfe; }
+  .badge.vehicle { background: #065f46; color: #a7f3d0; }
+  .badge.clear { background: #1f2937; color: #9ca3af; }
+  .badge.suspicious { background: #7f1d1d; color: #fca5a5; animation: pulse 1s infinite; }
+  .badge.crowd { background: #78350f; color: #fde68a; }
+  .confidence { font-size: 0.7rem; color: #6b7280; margin-top: 0.3rem; }
+  .alert-bar { background: #7f1d1d; padding: 0.75rem 2rem; font-size: 0.85rem; color: #fca5a5; display: none; }
+  footer { text-align: center; padding: 2rem; color: #4b5563; font-size: 0.75rem; border-top: 1px solid #1f2937; margin-top: 2rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏙️ Smart City Surveillance System</h1>
+  <div><span class="live-dot"></span><span style="font-size:0.8rem;color:#22c55e">LIVE</span></div>
+</header>
+
+<div id="alert-bar" class="alert-bar"></div>
+
+<div class="stats">
+  <div class="stat-card"><div class="number" id="total-count">0</div><div class="label">Total Analyzed</div></div>
+  <div class="stat-card"><div class="number" id="person-count" style="color:#60a5fa">0</div><div class="label">Person Detected</div></div>
+  <div class="stat-card"><div class="number" id="vehicle-count" style="color:#34d399">0</div><div class="label">Vehicle Detected</div></div>
+  <div class="stat-card"><div class="number" id="alert-count" style="color:#f87171">0</div><div class="label">Alerts</div></div>
+</div>
+
+<div class="section-title">Live Camera Feeds</div>
+<div class="feeds" id="feeds"></div>
+
+<footer>Smart City Surveillance — Azure IoT Hub + VM + Docker + ML + Blob Storage</footer>
+
+<script>
+const ML_ENDPOINT = "http://74.225.170.19:5000/classify";
+
+const CAMERAS = [
+  { id: 1, location: "Park Gate", url: "https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=400" },
+  { id: 2, location: "Main Road", url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400" },
+  { id: 3, location: "Building Entrance", url: "https://images.unsplash.com/photo-1474552226712-ac0f0961a954?w=400" },
+  { id: 4, location: "Parking Lot", url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400" },
+  { id: 5, location: "Market Area", url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400" }
+];
+
+let stats = { total: 0, person: 0, vehicle: 0, alerts: 0 };
+
+function getBadgeClass(classification) {
+  if (classification.includes("person")) return "person";
+  if (classification.includes("vehicle")) return "vehicle";
+  if (classification.includes("suspicious")) return "suspicious";
+  if (classification.includes("crowd")) return "crowd";
+  return "clear";
+}
+
+function updateStats() {
+  document.getElementById("total-count").textContent = stats.total;
+  document.getElementById("person-count").textContent = stats.person;
+  document.getElementById("vehicle-count").textContent = stats.vehicle;
+  document.getElementById("alert-count").textContent = stats.alerts;
+}
+
+function showAlert(location) {
+  const bar = document.getElementById("alert-bar");
+  bar.textContent = `⚠️ ALERT: Suspicious activity detected at ${location}!`;
+  bar.style.display = "block";
+  setTimeout(() => bar.style.display = "none", 5000);
+}
+
+async function analyzeCamera(camera) {
+  try {
+    const res = await fetch(`${ML_ENDPOINT}/classify?url=${encodeURIComponent(camera.url)}`);
+    const data = await res.json();
+
+    stats.total++;
+    if (data.classification.includes("person")) stats.person++;
+    if (data.classification.includes("vehicle")) stats.vehicle++;
+    if (data.classification.includes("suspicious")) { stats.alerts++; showAlert(camera.location); }
+    updateStats();
+
+    let card = document.getElementById(`camera-${camera.id}`);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "feed-card";
+      card.id = `camera-${camera.id}`;
+      document.getElementById("feeds").appendChild(card);
+    }
+
+    const badgeClass = getBadgeClass(data.classification);
+    card.innerHTML = `
+      <img src="${camera.url}" alt="${camera.location}" onerror="this.src='https://via.placeholder.com/400x160?text=Camera+${camera.id}'"/>
+      <div class="feed-info">
+        <div class="location">📷 Camera ${camera.id} — ${camera.location}</div>
+        <div class="time">Last updated: ${new Date().toLocaleTimeString()}</div>
+        <span class="badge ${badgeClass}">${data.classification}</span>
+        <div class="confidence">Confidence: ${(data.confidence * 100).toFixed(1)}%</div>
+      </div>
+    `;
+  } catch(e) {
+    console.error(`Camera ${camera.id} error:`, e);
+  }
+}
+
+async function refreshAll() {
+  for (const camera of CAMERAS) {
+    await analyzeCamera(camera);
+  }
+}
+
+refreshAll();
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>
