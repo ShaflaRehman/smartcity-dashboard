@@ -56,23 +56,15 @@
 <footer>Smart City Surveillance — Azure IoT Hub + VM + Docker + ML + Blob Storage</footer>
 
 <script>
-const ML_ENDPOINT = "http://74.225.170.19:5000/classify";
-
-const CAMERAS = [
-  { id: 1, location: "Park Gate", url: "https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=400" },
-  { id: 2, location: "Main Road", url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400" },
-  { id: 3, location: "Building Entrance", url: "https://images.unsplash.com/photo-1474552226712-ac0f0961a954?w=400" },
-  { id: 4, location: "Parking Lot", url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400" },
-  { id: 5, location: "Market Area", url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400" }
-];
+const BASE_URL = "https://smartcitystorage2025.blob.core.windows.net/results";
 
 let stats = { total: 0, person: 0, vehicle: 0, alerts: 0 };
 
-function getBadgeClass(classification) {
-  if (classification.includes("person")) return "person";
-  if (classification.includes("vehicle")) return "vehicle";
-  if (classification.includes("suspicious")) return "suspicious";
-  if (classification.includes("crowd")) return "crowd";
+function getBadgeClass(c) {
+  if (c.includes("person")) return "person";
+  if (c.includes("vehicle")) return "vehicle";
+  if (c.includes("suspicious")) return "suspicious";
+  if (c.includes("crowd")) return "crowd";
   return "clear";
 }
 
@@ -85,53 +77,48 @@ function updateStats() {
 
 function showAlert(location) {
   const bar = document.getElementById("alert-bar");
-  bar.textContent = `⚠️ ALERT: Suspicious activity detected at ${location}!`;
+  bar.textContent = `ALERT: Suspicious activity at ${location}!`;
   bar.style.display = "block";
   setTimeout(() => bar.style.display = "none", 5000);
 }
 
-async function analyzeCamera(camera) {
+async function loadResults() {
   try {
-    const res = await fetch(`${ML_ENDPOINT}/classify?url=${encodeURIComponent(camera.url)}`);
-    const data = await res.json();
-
-    stats.total++;
-    if (data.classification.includes("person")) stats.person++;
-    if (data.classification.includes("vehicle")) stats.vehicle++;
-    if (data.classification.includes("suspicious")) { stats.alerts++; showAlert(camera.location); }
-    updateStats();
-
-    let card = document.getElementById(`camera-${camera.id}`);
-    if (!card) {
-      card = document.createElement("div");
+    const res = await fetch(`${BASE_URL}?restype=container&comp=list`);
+    const text = await res.text();
+    const xml = new DOMParser().parseFromString(text, "text/xml");
+    const blobs = [...xml.querySelectorAll("Blob")];
+    const recent = blobs.slice(-5);
+    stats = { total: blobs.length, person: 0, vehicle: 0, alerts: 0 };
+    const feeds = document.getElementById("feeds");
+    feeds.innerHTML = "";
+    for (const blob of recent) {
+      const name = blob.querySelector("Name").textContent;
+      const blobRes = await fetch(`${BASE_URL}/${name}`);
+      const data = await blobRes.json();
+      if (data.classification.includes("person")) stats.person++;
+      if (data.classification.includes("vehicle")) stats.vehicle++;
+      if (data.classification.includes("suspicious")) { stats.alerts++; showAlert(data.location); }
+      const card = document.createElement("div");
       card.className = "feed-card";
-      card.id = `camera-${camera.id}`;
-      document.getElementById("feeds").appendChild(card);
+      card.innerHTML = `
+        <img src="${data.image_url}" alt="${data.location}"/>
+        <div class="feed-info">
+          <div class="location">Camera ${data.camera_id} — ${data.location}</div>
+          <div class="time">${data.timestamp}</div>
+          <span class="badge ${getBadgeClass(data.classification)}">${data.classification}</span>
+          <div class="confidence">Confidence: ${(data.confidence * 100).toFixed(1)}%</div>
+        </div>`;
+      feeds.appendChild(card);
     }
-
-    const badgeClass = getBadgeClass(data.classification);
-    card.innerHTML = `
-      <img src="${camera.url}" alt="${camera.location}" onerror="this.src='https://via.placeholder.com/400x160?text=Camera+${camera.id}'"/>
-      <div class="feed-info">
-        <div class="location">📷 Camera ${camera.id} — ${camera.location}</div>
-        <div class="time">Last updated: ${new Date().toLocaleTimeString()}</div>
-        <span class="badge ${badgeClass}">${data.classification}</span>
-        <div class="confidence">Confidence: ${(data.confidence * 100).toFixed(1)}%</div>
-      </div>
-    `;
+    updateStats();
   } catch(e) {
-    console.error(`Camera ${camera.id} error:`, e);
+    console.error("Error:", e);
   }
 }
 
-async function refreshAll() {
-  for (const camera of CAMERAS) {
-    await analyzeCamera(camera);
-  }
-}
-
-refreshAll();
-setInterval(refreshAll, 10000);
+loadResults();
+setInterval(loadResults, 10000);
 </script>
 </body>
 </html>
